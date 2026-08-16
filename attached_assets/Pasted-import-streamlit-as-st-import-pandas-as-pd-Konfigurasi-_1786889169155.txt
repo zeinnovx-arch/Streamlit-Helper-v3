@@ -1,0 +1,71 @@
+import streamlit as st
+import pandas as pd
+
+# Konfigurasi Halaman Website
+st.set_page_config(page_title="Filter Data Pelanggan", layout="wide")
+
+st.title("📊 Aplikasi Filter Data Pelanggan Excel")
+st.markdown("Upload file Excel data pelanggan Anda untuk mulai memfilter berdasarkan Daerah dan Jam Nyala.")
+
+# 1. Fitur Upload File Excel
+uploaded_file = st.file_uploader("Upload file Excel (.xlsx / .xls)", type=["xlsx", "xls"])
+
+if uploaded_file is not None:
+    try:
+        # Membaca data Excel
+        df = pd.read_excel(uploaded_file)
+
+        # Validasi ketersediaan kolom
+        required_columns = {'ID_Pelanggan', 'Nama', 'Daerah', 'Jam_Nyala'}
+        if not required_columns.issubset(df.columns):
+            st.error(f"File Excel harus memiliki kolom berikut: {', '.join(required_columns)}")
+        else:
+            st.success("File berhasil diunggah!")
+
+            # Sidebar untuk Kontrol Filter
+            st.sidebar.header("🔍 Panel Filter")
+
+            # Filter Daerah (Ketik manual)
+            daerah_input = st.sidebar.text_input("Cari Daerah:", "")
+
+            # Filter Jam Nyala (Kriteria Preset & Custom)
+            pilihan_jam = st.sidebar.selectbox(
+                "Pilih Filter Jam Nyala:",
+                ["Semua Data", "Di bawah 50 Jam (< 50)", "Antara 80 - 150 Jam", "Atur Rentang Sendiri (Custom)"]
+            )
+
+            # Logika Pemrosesan Filter
+            filtered_df = df.copy()
+
+            # Filter Daerah
+            if daerah_input.strip() != "":
+                filtered_df = filtered_df[filtered_df['Daerah'].astype(str).str.contains(daerah_input, case=False, na=False)]
+
+            # Filter Jam Nyala
+            if pilihan_jam == "Di bawah 50 Jam (< 50)":
+                filtered_df = filtered_df[filtered_df['Jam_Nyala'] < 50]
+            elif pilihan_jam == "Antara 80 - 150 Jam":
+                filtered_df = filtered_df[(filtered_df['Jam_Nyala'] >= 80) & (filtered_df['Jam_Nyala'] <= 150)]
+            elif pilihan_jam == "Atur Rentang Sendiri (Custom)":
+                min_val = int(df['Jam_Nyala'].min()) if not df['Jam_Nyala'].empty else 0
+                max_val = int(df['Jam_Nyala'].max()) if not df['Jam_Nyala'].empty else 500
+                range_jam = st.sidebar.slider("Rentang Jam Nyala:", min_val, max_val, (min_val, max_val))
+                filtered_df = filtered_df[(filtered_df['Jam_Nyala'] >= range_jam[0]) & (filtered_df['Jam_Nyala'] <= range_jam[1])]
+
+            # Tampilkan Hasil Filter
+            st.subheader(f"Hasil Filter ({len(filtered_df)} Data Ditemukan)")
+            st.dataframe(filtered_df[['ID_Pelanggan', 'Nama', 'Daerah', 'Jam_Nyala']], use_container_width=True)
+
+            # Bonus: Tombol Download Hasil Filter ke Excel
+            output_data = filtered_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Hasil Filter (CSV)",
+                data=output_data,
+                file_name="hasil_filter_pelanggan.csv",
+                mime="text/csv"
+            )
+
+    except Exception as e:
+        st.error(f"Terjadi kesalahan saat membaca file: {e}")
+else:
+    st.info("Silakan unggah file Excel untuk menampilkan data.")

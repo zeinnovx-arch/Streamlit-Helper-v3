@@ -1,0 +1,1 @@
+- [Streamlit workflow startup](streamlit-workflow.md) — disable onboarding and bind Streamlit publicly so preview port detection succeeds.

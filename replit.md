@@ -1,9 +1,10 @@
-# [Project name]
+# Excel Filter App
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+An interactive Streamlit dashboard for uploading Excel workbooks or CSV files, filtering rows, reviewing summaries, and exporting results.
 
 ## Run & Operate
 
+- `streamlit run app.py --server.port 5000 --server.address 0.0.0.0` — run the Excel filtering dashboard
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
@@ -13,6 +14,7 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Stack
 
+- Streamlit, Python 3.11, pandas, openpyxl, xlrd
 - pnpm workspaces, Node.js 24, TypeScript 5.9
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
@@ -22,23 +24,32 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `app.py` — Streamlit UI, workbook loading, filtering, summaries, and exports
+- `pyproject.toml` — Python dependencies
+- `main.py` — original Python scaffold entry point; not used by the dashboard workflow
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Uploaded files are processed in memory for the current session and are not persisted.
+- Filtering keeps missing values visible when a numeric, date, or categorical filter is active.
+- Excel exports are generated in memory as a new workbook containing only the filtered rows.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Upload `.xlsx`, `.xls`, or `.csv` files.
+- Switch between workbook sheets.
+- Search all columns and add targeted text, numeric-range, date-range, or categorical filters.
+- View row counts, match rate, column metadata, numeric summaries, and the filtered table.
+- Download filtered results as CSV or Excel.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+No additional preferences recorded.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- The dashboard workflow uses Streamlit on port 5000 with a public bind address.
+- Legacy `.xls` files use the `xlrd` engine; `.xlsx` files use `openpyxl`.
 
 ## Pointers
 
