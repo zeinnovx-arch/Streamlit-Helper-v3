@@ -11,6 +11,10 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[ports]]
+localPort = 5000
+externalPort = 5000
+
 [[workflows.workflow]]
 name = "Project"
 mode = "parallel"
@@ -29,7 +33,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "streamlit run app.py --server.port 5000 --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false"
+args = "streamlit run app.py --server.port 5000 --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false --browser.gatherUsageStats false"
 waitForPort = 5000
 
 [agent]

@@ -1,1 +1,2 @@
 - [Streamlit workflow startup](streamlit-workflow.md) — disable onboarding and bind Streamlit publicly so preview port detection succeeds.
+- [Streamlit preview routing](streamlit-preview-routing.md) — map the standalone workflow port to the Replit dev-domain port.
