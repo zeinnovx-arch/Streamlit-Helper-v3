@@ -211,21 +211,16 @@ def apply_customer_filters(
         ]
         active_filters.append("Jam Nyala: 80–150 jam")
     elif pilihan_jam == "Atur Rentang Sendiri (Custom)":
-        minimum = float(valid_hours.min())
-        maximum = float(valid_hours.max())
-        if minimum == maximum:
-            selected_range = (minimum, maximum)
-            st.sidebar.caption(f"Semua nilai Jam_Nyala adalah {format_value(minimum)}.")
-        else:
-            step = 1.0 if (minimum.is_integer() and maximum.is_integer()) else 0.1
-            selected_range = st.sidebar.slider(
-                "Rentang Jam Nyala",
-                min_value=minimum,
-                max_value=maximum,
-                value=(minimum, maximum),
-                step=step,
-                key="customer_hours_range",
-            )
+        minimum = 0.0
+        maximum = 150.0
+        selected_range = st.sidebar.slider(
+            "Rentang Jam Nyala (0–150)",
+            min_value=minimum,
+            max_value=maximum,
+            value=(minimum, maximum),
+            step=1.0,
+            key="customer_hours_range",
+        )
         filtered_hours = pd.to_numeric(
             filtered_dataframe["Jam_Nyala"], errors="coerce"
         )
