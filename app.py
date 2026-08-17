@@ -8,13 +8,17 @@ import streamlit as st
 
 
 st.set_page_config(
-    page_title="Excel Filter App",
+    page_title="Dashboard Filter Pelanggan PLN",
     page_icon="▦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 CUSTOMER_COLUMNS = ["ID_Pelanggan", "Nama", "Daerah", "Jam_Nyala"]
+LOGIN_USERNAME = "PLNDKP@FILTER"
+LOGIN_PASSWORD = "DKP.12345"
+PLN_LOGO_PATH = "attached_assets/pln-logo.svg"
+HOURS_FILTER_OPTIONS = ["Semua Data", "0–50 Jam", "50–80 Jam", "80–150 Jam"]
 
 
 def load_workbook(uploaded_file: Any) -> tuple[dict[str, pd.DataFrame], str | None]:
@@ -34,7 +38,7 @@ def load_workbook(uploaded_file: Any) -> tuple[dict[str, pd.DataFrame], str | No
         }
         return sheets, None
     except Exception as error:
-        return {}, f"Could not read this file: {error}"
+        return {}, f"Gagal membaca file: {error}"
 
 
 def normalise_dates(series: pd.Series) -> pd.Series:
@@ -62,10 +66,37 @@ def excel_download(dataframe: pd.DataFrame) -> bytes:
 
 def format_value(value: Any) -> str:
     if pd.isna(value):
-        return "Missing"
+        return "Kosong"
     if isinstance(value, float):
         return f"{value:,.2f}"
     return str(value)
+
+
+def is_hours_column(column: Any) -> bool:
+    normalised = "".join(character for character in str(column) if character.isalnum())
+    return normalised.casefold() == "jamnyala"
+
+
+def get_hours_filter_mask(
+    series: pd.Series, widget_key: str
+) -> tuple[pd.Series, str | None]:
+    selected_range = st.sidebar.selectbox(
+        "Rentang JAMNYALA",
+        HOURS_FILTER_OPTIONS,
+        key=widget_key,
+    )
+    numeric_series = pd.to_numeric(series, errors="coerce")
+    if numeric_series.dropna().empty:
+        st.sidebar.warning("Kolom JAMNYALA tidak memiliki angka yang bisa difilter.")
+        return pd.Series(True, index=series.index), None
+
+    if selected_range == "0–50 Jam":
+        return numeric_series.ge(0) & numeric_series.lt(50), selected_range
+    if selected_range == "50–80 Jam":
+        return numeric_series.ge(50) & numeric_series.lt(80), selected_range
+    if selected_range == "80–150 Jam":
+        return numeric_series.ge(80) & numeric_series.le(150), selected_range
+    return pd.Series(True, index=series.index), None
 
 
 def apply_filters(
@@ -84,11 +115,20 @@ def apply_filters(
             )
         )
         mask &= searchable.any(axis=1)
-        active_filters.append(f"Search: “{global_search.strip()}”")
+        active_filters.append(f"Pencarian: “{global_search.strip()}”")
 
     for column in filter_columns:
         series = dataframe[column]
         safe_key = "".join(character if character.isalnum() else "_" for character in column)
+
+        if is_hours_column(column):
+            hours_mask, selected_range = get_hours_filter_mask(
+                series, f"hours_{safe_key}"
+            )
+            mask &= hours_mask
+            if selected_range:
+                active_filters.append(f"{column}: {selected_range}")
+            continue
 
         if pd.api.types.is_numeric_dtype(series):
             numeric_series = pd.to_numeric(series, errors="coerce")
@@ -100,7 +140,7 @@ def apply_filters(
             if minimum == maximum:
                 continue
             selected_range = st.sidebar.slider(
-                f"{column} range",
+                f"Rentang {column}",
                 min_value=minimum,
                 max_value=maximum,
                 value=(minimum, maximum),
@@ -120,7 +160,7 @@ def apply_filters(
             minimum_date = valid_dates.min().date()
             maximum_date = valid_dates.max().date()
             selected_dates = st.sidebar.date_input(
-                f"{column} date range",
+                f"Rentang tanggal {column}",
                 value=(minimum_date, maximum_date),
                 min_value=minimum_date,
                 max_value=maximum_date,
@@ -139,25 +179,25 @@ def apply_filters(
             unique_values = sorted(values.unique().tolist())
             if len(unique_values) <= 150:
                 selected_values = st.sidebar.multiselect(
-                    f"{column} values",
+                    f"Nilai {column}",
                     options=unique_values,
                     default=unique_values,
                     key=f"values_{safe_key}",
                 )
                 if len(selected_values) != len(unique_values):
                     mask &= series.astype("string").isin(selected_values) | series.isna()
-                    active_filters.append(f"{column}: {len(selected_values)} values")
+                    active_filters.append(f"{column}: {len(selected_values)} nilai")
             else:
                 contains = st.sidebar.text_input(
-                    f"{column} contains",
+                    f"{column} memuat teks",
                     key=f"contains_{safe_key}",
-                    placeholder="Type to match values",
+                    placeholder="Ketik teks yang dicari",
                 )
                 if contains.strip():
                     mask &= series.astype("string").str.contains(
                         contains.strip(), case=False, na=False, regex=False
                     ) | series.isna()
-                    active_filters.append(f"{column} contains “{contains.strip()}”")
+                    active_filters.append(f"{column} memuat “{contains.strip()}”")
 
     return dataframe.loc[mask].copy(), active_filters
 
@@ -174,13 +214,8 @@ def apply_customer_filters(
         st.header("Panel filter pelanggan")
         daerah_input = st.text_input("Cari Daerah", placeholder="Contoh: Jakarta")
         pilihan_jam = st.selectbox(
-            "Pilih Filter Jam Nyala",
-            [
-                "Semua Data",
-                "Di bawah 50 Jam (< 50)",
-                "Antara 80–150 Jam",
-                "Atur Rentang Sendiri (Custom)",
-            ],
+            "Pilih Rentang Jam Nyala",
+            HOURS_FILTER_OPTIONS,
             key="customer_hours_filter",
         )
 
@@ -192,71 +227,88 @@ def apply_customer_filters(
         ]
         active_filters.append(f"Daerah: {daerah_input.strip()}")
 
-    hours = pd.to_numeric(dataframe["Jam_Nyala"], errors="coerce")
-    valid_hours = hours.dropna()
+    hours_mask = pd.Series(True, index=dataframe.index)
+    if pilihan_jam == "0–50 Jam":
+        hours_mask = pd.to_numeric(dataframe["Jam_Nyala"], errors="coerce").ge(0) & (
+            pd.to_numeric(dataframe["Jam_Nyala"], errors="coerce").lt(50)
+        )
+    elif pilihan_jam == "50–80 Jam":
+        hours_mask = pd.to_numeric(dataframe["Jam_Nyala"], errors="coerce").ge(50) & (
+            pd.to_numeric(dataframe["Jam_Nyala"], errors="coerce").lt(80)
+        )
+    elif pilihan_jam == "80–150 Jam":
+        hours_mask = pd.to_numeric(dataframe["Jam_Nyala"], errors="coerce").ge(80) & (
+            pd.to_numeric(dataframe["Jam_Nyala"], errors="coerce").le(150)
+        )
 
-    if valid_hours.empty:
-        st.sidebar.warning("Kolom Jam_Nyala tidak memiliki angka yang bisa difilter.")
-    elif pilihan_jam == "Di bawah 50 Jam (< 50)":
-        filtered_dataframe = filtered_dataframe[
-            pd.to_numeric(filtered_dataframe["Jam_Nyala"], errors="coerce") < 50
-        ]
-        active_filters.append("Jam Nyala: di bawah 50 jam")
-    elif pilihan_jam == "Antara 80–150 Jam":
-        filtered_hours = pd.to_numeric(
-            filtered_dataframe["Jam_Nyala"], errors="coerce"
-        )
-        filtered_dataframe = filtered_dataframe[
-            filtered_hours.between(80, 150, inclusive="both")
-        ]
-        active_filters.append("Jam Nyala: 80–150 jam")
-    elif pilihan_jam == "Atur Rentang Sendiri (Custom)":
-        minimum = 0.0
-        maximum = 150.0
-        selected_range = st.sidebar.slider(
-            "Rentang Jam Nyala (0–150)",
-            min_value=minimum,
-            max_value=maximum,
-            value=(minimum, maximum),
-            step=1.0,
-            key="customer_hours_range",
-        )
-        filtered_hours = pd.to_numeric(
-            filtered_dataframe["Jam_Nyala"], errors="coerce"
-        )
-        filtered_dataframe = filtered_dataframe[
-            filtered_hours.between(*selected_range, inclusive="both")
-        ]
-        if selected_range != (minimum, maximum):
-            active_filters.append(
-                f"Jam Nyala: {format_value(selected_range[0])}–"
-                f"{format_value(selected_range[1])} jam"
-            )
+    filtered_dataframe = filtered_dataframe.loc[
+        hours_mask.reindex(filtered_dataframe.index, fill_value=False)
+    ]
+    if pilihan_jam != "Semua Data":
+        active_filters.append(f"Jam Nyala: {pilihan_jam}")
 
     return filtered_dataframe, active_filters
 
 
 def show_empty_state() -> None:
     st.info(
-        "Upload an Excel workbook or CSV file in the sidebar to start filtering. "
-        "Your file stays in this session and is not saved."
+        "Unggah file Excel atau CSV melalui bilah samping untuk mulai memfilter. "
+        "File hanya digunakan selama sesi ini dan tidak disimpan."
     )
-    st.subheader("What you can do here")
+    st.subheader("Yang dapat dilakukan")
     columns = st.columns(3)
-    columns[0].write("**Explore**\n\nSwitch between workbook sheets and inspect the data at a glance.")
-    columns[1].write("**Filter**\n\nSearch every column or apply targeted text, number, and date filters.")
-    columns[2].write("**Export**\n\nDownload the filtered rows as CSV or a new Excel workbook.")
+    columns[0].write("**Jelajahi**\n\nPilih sheet dan lihat data secara ringkas.")
+    columns[1].write("**Filter**\n\nCari di semua kolom atau gunakan filter teks, angka, dan tanggal.")
+    columns[2].write("**Ekspor**\n\nUnduh hasil filter sebagai CSV atau file Excel baru.")
 
 
-st.title("Excel Filter App")
-st.caption("Turn a spreadsheet into a focused, searchable view in a few clicks.")
+def render_logo_header() -> None:
+    header_left, header_right = st.columns([5, 1])
+    with header_right:
+        st.image(PLN_LOGO_PATH, width=120)
+
+
+def show_login() -> bool:
+    if st.session_state.get("authenticated", False):
+        return True
+
+    st.title("Masuk ke Dashboard")
+    st.caption("Silakan masukkan akun Anda untuk mengakses Dashboard Filter Pelanggan PLN.")
+    with st.form("login_form", clear_on_submit=False):
+        username = st.text_input("Username", placeholder="Masukkan username")
+        password = st.text_input(
+            "Password", type="password", placeholder="Masukkan password"
+        )
+        submitted = st.form_submit_button("Masuk", use_container_width=True)
+
+    if submitted:
+        if username == LOGIN_USERNAME and password == LOGIN_PASSWORD:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Username atau password salah.")
+    return False
+
+
+render_logo_header()
+if not show_login():
+    st.stop()
+
+st.title("Dashboard Filter Pelanggan PLN")
+st.caption("Kelola, filter, dan unduh data pelanggan dengan lebih cepat.")
 
 with st.sidebar:
-    st.header("Load your data")
+    st.header("Akun")
+    st.caption(f"Masuk sebagai: {LOGIN_USERNAME}")
+    if st.button("Keluar", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
+    st.divider()
+    st.header("Muat data")
     uploaded_file = st.file_uploader(
-        "Choose an Excel workbook or CSV file",
+        "Pilih file Excel atau CSV",
         type=["xlsx", "xls", "csv"],
-        help="Supported formats: .xlsx, .xls, and .csv",
+        help="Format yang didukung: .xlsx, .xls, dan .csv",
     )
 
 if uploaded_file is None:
@@ -269,12 +321,12 @@ if load_error:
     st.stop()
 
 if not sheets:
-    st.warning("This file does not contain any readable sheets.")
+    st.warning("File ini tidak memiliki sheet yang dapat dibaca.")
     st.stop()
 
 with st.sidebar:
     st.divider()
-    sheet_name = st.selectbox("Select a sheet", list(sheets.keys()))
+    sheet_name = st.selectbox("Pilih sheet", list(sheets.keys()))
 
 dataframe = sheets[sheet_name].copy()
 dataframe.columns = [
@@ -294,16 +346,16 @@ if customer_mode:
 else:
     with st.sidebar:
         st.divider()
-        st.header("Filter rows")
+        st.header("Filter baris")
         global_search = st.text_input(
-            "Search all columns",
-            placeholder="e.g. customer, Jakarta, pending",
-            help="Matches text anywhere in a row.",
+            "Cari di semua kolom",
+            placeholder="Contoh: pelanggan, Jakarta, pending",
+            help="Mencocokkan teks di seluruh kolom.",
         )
         filter_columns = st.multiselect(
-            "Choose columns to filter",
+            "Pilih kolom untuk difilter",
             options=dataframe.columns.tolist(),
-            help="Add as many column filters as you need.",
+            help="Tambahkan satu atau beberapa kolom filter.",
         )
 
     filtered_dataframe, active_filters = apply_filters(
@@ -316,17 +368,17 @@ filtered_rows = len(filtered_dataframe)
 match_rate = (filtered_rows / total_rows * 100) if total_rows else 0
 
 metric_columns = st.columns(4)
-metric_columns[0].metric("Rows shown", f"{filtered_rows:,}")
-metric_columns[1].metric("Rows in sheet", f"{total_rows:,}")
-metric_columns[2].metric("Columns", f"{len(dataframe.columns):,}")
-metric_columns[3].metric("Match rate", f"{match_rate:.1f}%")
+metric_columns[0].metric("Baris ditampilkan", f"{filtered_rows:,}")
+metric_columns[1].metric("Total baris", f"{total_rows:,}")
+metric_columns[2].metric("Kolom", f"{len(dataframe.columns):,}")
+metric_columns[3].metric("Persentase cocok", f"{match_rate:.1f}%")
 
 if active_filters:
-    st.caption("Active filters: " + "  ·  ".join(active_filters))
+    st.caption("Filter aktif: " + "  ·  ".join(active_filters))
 else:
-    st.caption(f"Showing all rows from “{sheet_name}”.")
+    st.caption(f"Menampilkan semua baris dari “{sheet_name}”.")
 
-tab_data, tab_summary = st.tabs(["Filtered data", "Column overview"])
+tab_data, tab_summary = st.tabs(["Data hasil filter", "Ringkasan kolom"])
 
 with tab_data:
     st.dataframe(
@@ -336,16 +388,14 @@ with tab_data:
         height=520,
     )
     st.download_button(
-        "Download hasil filter CSV" if customer_mode else "Download filtered CSV",
+        "Unduh hasil filter CSV",
         data=filtered_dataframe.to_csv(index=False).encode("utf-8"),
         file_name="hasil-filter-pelanggan.csv" if customer_mode else "filtered-data.csv",
         mime="text/csv",
         disabled=filtered_dataframe.empty,
     )
     st.download_button(
-        "Download hasil filter Excel"
-        if customer_mode
-        else "Download filtered Excel",
+        "Unduh hasil filter Excel",
         data=excel_download(filtered_dataframe),
         file_name="hasil-filter-pelanggan.xlsx"
         if customer_mode
@@ -354,22 +404,22 @@ with tab_data:
         disabled=filtered_dataframe.empty,
     )
     if filtered_dataframe.empty:
-        st.warning("No rows match the current filters. Try widening your selection.")
+        st.warning("Tidak ada baris yang cocok. Coba longgarkan filter Anda.")
 
 with tab_summary:
     overview = pd.DataFrame(
         {
-            "Column": dataframe.columns,
-            "Type": [str(dataframe[column].dtype) for column in dataframe.columns],
-            "Non-empty": [int(dataframe[column].notna().sum()) for column in dataframe.columns],
-            "Unique values": [int(dataframe[column].nunique(dropna=True)) for column in dataframe.columns],
+            "Kolom": dataframe.columns,
+            "Tipe": [str(dataframe[column].dtype) for column in dataframe.columns],
+            "Tidak kosong": [int(dataframe[column].notna().sum()) for column in dataframe.columns],
+            "Nilai unik": [int(dataframe[column].nunique(dropna=True)) for column in dataframe.columns],
         }
     )
     st.dataframe(overview, use_container_width=True, hide_index=True)
 
     numeric_columns = dataframe.select_dtypes(include="number").columns.tolist()
     if numeric_columns:
-        st.subheader("Numeric summary")
+        st.subheader("Ringkasan numerik")
         st.dataframe(
             dataframe[numeric_columns].describe().transpose(),
             use_container_width=True,
