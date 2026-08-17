@@ -268,6 +268,114 @@ def render_logo_header() -> None:
         st.image(PLN_LOGO_PATH, width=120)
 
 
+def render_opening_decoration() -> None:
+    st.markdown(
+        """
+        <style>
+        .pln-opening {
+            position: relative;
+            overflow: hidden;
+            margin: 0.75rem 0 2rem;
+            border-radius: 18px;
+            background: #071a3b;
+            box-shadow: 0 16px 32px rgba(7, 26, 59, 0.18);
+            color: #ffffff;
+        }
+        .pln-opening__stripe {
+            height: 8px;
+            background: linear-gradient(
+                90deg,
+                #f6c700 0%,
+                #f6c700 34%,
+                #e52b35 34%,
+                #e52b35 67%,
+                #1254a4 67%,
+                #1254a4 100%
+            );
+        }
+        .pln-opening__body {
+            position: relative;
+            z-index: 1;
+            padding: 2rem 2.25rem 2.15rem;
+        }
+        .pln-opening__eyebrow {
+            color: #f6c700;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+        }
+        .pln-opening__headline {
+            max-width: 33rem;
+            margin-top: 0.55rem;
+            color: #ffffff;
+            font-size: clamp(1.55rem, 3vw, 2.45rem);
+            font-weight: 750;
+            line-height: 1.08;
+        }
+        .pln-opening__copy {
+            max-width: 35rem;
+            margin-top: 0.8rem;
+            color: #d6e2f5;
+            font-size: 1rem;
+            line-height: 1.55;
+        }
+        .pln-opening__dots {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1.25rem;
+        }
+        .pln-opening__dot {
+            display: block;
+            width: 0.7rem;
+            height: 0.7rem;
+            border-radius: 999px;
+        }
+        .pln-opening__dot--yellow { background: #f6c700; }
+        .pln-opening__dot--red { background: #e52b35; }
+        .pln-opening__dot--blue { background: #2d73c9; }
+        .pln-opening__orb {
+            position: absolute;
+            right: 8%;
+            bottom: -5rem;
+            width: 16rem;
+            height: 16rem;
+            border: 1.5rem solid rgba(246, 199, 0, 0.12);
+            border-radius: 50%;
+        }
+        .pln-opening__beam {
+            position: absolute;
+            right: 15%;
+            top: 2.4rem;
+            width: 0.35rem;
+            height: 9rem;
+            transform: rotate(33deg);
+            background: linear-gradient(#f6c700, #e52b35);
+            opacity: 0.8;
+        }
+        </style>
+        <div class="pln-opening" aria-label="Pembuka Dashboard Filter Pelanggan PLN">
+            <div class="pln-opening__stripe"></div>
+            <div class="pln-opening__body">
+                <div class="pln-opening__eyebrow">Portal Data Pelanggan</div>
+                <div class="pln-opening__headline">Satu dashboard untuk data yang lebih terang dan terarah.</div>
+                <div class="pln-opening__copy">
+                    Kelola, cari, dan filter data pelanggan PLN dengan cepat sebelum masuk ke dashboard.
+                </div>
+                <div class="pln-opening__dots" aria-hidden="true">
+                    <span class="pln-opening__dot pln-opening__dot--yellow"></span>
+                    <span class="pln-opening__dot pln-opening__dot--red"></span>
+                    <span class="pln-opening__dot pln-opening__dot--blue"></span>
+                </div>
+            </div>
+            <span class="pln-opening__orb" aria-hidden="true"></span>
+            <span class="pln-opening__beam" aria-hidden="true"></span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def show_login() -> bool:
     if st.session_state.get("authenticated", False):
         return True
@@ -292,6 +400,7 @@ def show_login() -> bool:
 
 render_logo_header()
 if not show_login():
+    render_opening_decoration()
     st.stop()
 
 st.title("Dashboard Filter Pelanggan PLN")
