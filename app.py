@@ -125,10 +125,32 @@ def normalize_placeholder_key(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name).casefold())
 
 
-def build_placeholder_map(row: dict[str, Any]) -> dict[str, str]:
-    return {
+def build_placeholder_map(
+    row: dict[str, Any], extra: dict[str, Any] | None = None
+) -> dict[str, str]:
+    value_map = {
         normalize_placeholder_key(column): format_value(value)
         for column, value in row.items()
+    }
+    if extra:
+        for column, value in extra.items():
+            value_map[normalize_placeholder_key(column)] = format_value(value)
+    return value_map
+
+
+def current_print_date_fields() -> dict[str, str]:
+    """Field tanggal cetak otomatis (hari ini) untuk disisipkan ke placeholder template.
+
+    Bisa dipakai di template dengan salah satu dari: {Tanggal_Cetak}, {TanggalCetak},
+    {Tgl_Cetak}, atau {Tanggal Cetak} — semuanya merujuk ke nilai yang sama.
+    """
+    today = datetime.now().date()
+    formatted = format_indonesian_date(today)
+    return {
+        "Tanggal_Cetak": formatted,
+        "TanggalCetak": formatted,
+        "Tgl_Cetak": formatted,
+        "Tanggal Cetak": formatted,
     }
 
 
@@ -155,13 +177,15 @@ def _replace_in_docx_paragraph(paragraph: Any, value_map: dict[str, str]) -> Non
         paragraph.text = new_text
 
 
-def fill_docx_template(template_bytes: bytes, row: dict[str, Any]) -> bytes:
+def fill_docx_template(
+    template_bytes: bytes, row: dict[str, Any], extra_fields: dict[str, Any] | None = None
+) -> bytes:
     """Isi placeholder {NamaKolom} pada template Word dengan data satu baris."""
     if not DOCX_AVAILABLE:
         raise RuntimeError(
             "Modul python-docx belum terpasang. Jalankan `pip install python-docx`."
         )
-    value_map = build_placeholder_map(row)
+    value_map = build_placeholder_map(row, extra_fields)
     document = DocxDocument(BytesIO(template_bytes))
 
     for paragraph in document.paragraphs:
@@ -182,9 +206,11 @@ def fill_docx_template(template_bytes: bytes, row: dict[str, Any]) -> bytes:
     return output.getvalue()
 
 
-def fill_xlsx_template(template_bytes: bytes, row: dict[str, Any]) -> bytes:
+def fill_xlsx_template(
+    template_bytes: bytes, row: dict[str, Any], extra_fields: dict[str, Any] | None = None
+) -> bytes:
     """Isi placeholder {NamaKolom} pada template Excel dengan data satu baris."""
-    value_map = build_placeholder_map(row)
+    value_map = build_placeholder_map(row, extra_fields)
     workbook = openpyxl.load_workbook(BytesIO(template_bytes))
 
     for sheet in workbook.worksheets:
@@ -196,6 +222,155 @@ def fill_xlsx_template(template_bytes: bytes, row: dict[str, Any]) -> bytes:
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
+
+
+# --- FUNGSI KONVERSI HASIL TEMPLATE (WORD/EXCEL) MENJADI HTML SIAP-PRINT ---
+def _escape_html(text: str) -> str:
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def docx_bytes_to_print_html(filled_docx_bytes: bytes) -> str:
+    """Ubah dokumen Word yang sudah terisi menjadi potongan HTML untuk ditampilkan & dicetak di browser."""
+    if not DOCX_AVAILABLE:
+        raise RuntimeError(
+            "Modul python-docx belum terpasang. Jalankan `pip install python-docx`."
+        )
+    document = DocxDocument(BytesIO(filled_docx_bytes))
+    parts: list[str] = ['<div class="doc-page">']
+
+    for element in document.element.body:
+        tag = element.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            from docx.text.paragraph import Paragraph
+
+            paragraph = Paragraph(element, document)
+            text = _escape_html(paragraph.text)
+            if text.strip():
+                parts.append(f"<p>{text}</p>")
+            else:
+                parts.append("<p>&nbsp;</p>")
+        elif tag == "tbl":
+            from docx.table import Table
+
+            table = Table(element, document)
+            parts.append('<table class="doc-table">')
+            for table_row in table.rows:
+                parts.append("<tr>")
+                for cell in table_row.cells:
+                    cell_text = _escape_html(cell.text)
+                    parts.append(f"<td>{cell_text}</td>")
+                parts.append("</tr>")
+            parts.append("</table>")
+
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
+def xlsx_bytes_to_print_html(filled_xlsx_bytes: bytes) -> str:
+    """Ubah workbook Excel yang sudah terisi menjadi potongan HTML tabel untuk dicetak di browser."""
+    workbook = openpyxl.load_workbook(BytesIO(filled_xlsx_bytes))
+    parts: list[str] = ['<div class="doc-page">']
+
+    for sheet in workbook.worksheets:
+        if len(workbook.worksheets) > 1:
+            parts.append(f"<h4>{_escape_html(sheet.title)}</h4>")
+        parts.append('<table class="doc-table">')
+        for sheet_row in sheet.iter_rows():
+            if all(cell.value in (None, "") for cell in sheet_row):
+                continue
+            parts.append("<tr>")
+            for cell in sheet_row:
+                cell_text = _escape_html(cell.value) if cell.value is not None else "&nbsp;"
+                parts.append(f"<td>{cell_text}</td>")
+            parts.append("</tr>")
+        parts.append("</table>")
+
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
+def render_template_print_button(pages_html: list[str]) -> None:
+    """Tampilkan tombol Print yang membuka dialog cetak browser untuk hasil template terisi."""
+    combined_pages = "\n".join(
+        f'<div class="doc-page-wrapper{" page-break" if index > 0 else ""}">{page}</div>'
+        for index, page in enumerate(pages_html)
+    )
+
+    print_html = f"""
+    <style>
+        .doc-page-wrapper {{
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+            color: #1a1a1a;
+            padding: 12px 4px;
+        }}
+        .doc-page-wrapper p {{
+            margin: 4px 0;
+        }}
+        .doc-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 8px 0 16px;
+        }}
+        .doc-table td {{
+            border: 1px solid #ccc;
+            padding: 6px 8px;
+        }}
+        @media print {{
+            body * {{ visibility: hidden; }}
+            #template-print-area, #template-print-area * {{ visibility: visible; }}
+            #template-print-area {{
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }}
+            .page-break {{ page-break-before: always; }}
+            .no-print {{ display: none !important; }}
+        }}
+    </style>
+
+    <div class="no-print">
+        <button onclick="window.print()" style="
+            background-color: #1254a4;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 5px;
+            margin-bottom: 15px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        ">
+            🖨️ Cetak / Print Hasil Template
+        </button>
+    </div>
+
+    <div id="template-print-area" style="display: none;">
+        {combined_pages}
+    </div>
+
+    <script>
+        window.onbeforeprint = function() {{
+            document.getElementById('template-print-area').style.display = 'block';
+        }};
+        window.onafterprint = function() {{
+            document.getElementById('template-print-area').style.display = 'none';
+        }};
+    </script>
+    """
+    preview_height = min(200 + 260 * len(pages_html), 900)
+    st.components.v1.html(print_html, height=preview_height, scrolling=True)
 
 
 def zip_documents(files: dict[str, bytes]) -> bytes:
@@ -1045,20 +1220,37 @@ with tab_data:
     if filtered_dataframe.empty:
         st.warning("Tidak ada baris yang cocok. Coba longgarkan filter Anda.")
 
-    # --- FITUR CETAK DENGAN TEMPLATE (WORD/EXCEL) ---
+    # --- FITUR CETAK DENGAN TEMPLATE (WORD/EXCEL) — KHUSUS BARIS YANG SUDAH DICENTANG ---
     st.divider()
     st.subheader("🖶 Cetak dengan Template")
+    st.caption(
+        "Fitur ini otomatis mengambil baris yang sudah Anda **centang (Cek)** di tabel "
+        "atas, mengisi template dengan datanya, menyisipkan **tanggal cetak hari ini**, "
+        "lalu langsung menyiapkannya untuk **Print** lewat browser (bukan unduh file)."
+    )
 
     template_bytes = st.session_state.get("print_template_bytes")
     template_name = st.session_state.get("print_template_name", "")
+
+    # Ambil hanya baris yang sudah dicentang (Cek = True) dari riwayat pengecekan
+    checked_log = load_checked_log()
+    checked_row_indices = [
+        row_index
+        for row_index in filtered_dataframe.index
+        if compute_row_key(filtered_dataframe.loc[row_index], customer_mode) in checked_log
+    ]
+    rows_to_print = filtered_dataframe.loc[checked_row_indices]
 
     if not template_bytes:
         st.info(
             "Unggah template Word (.docx) atau Excel (.xlsx) pada bilah samping "
             "untuk mengisi otomatis data ke dalam format cetak Anda sendiri."
         )
-    elif filtered_dataframe.empty:
-        st.info("Tidak ada data hasil filter untuk dicetak dari template.")
+    elif rows_to_print.empty:
+        st.info(
+            "Belum ada baris yang dicentang (✅ **Cek**) pada tabel di atas. "
+            "Centang dulu baris yang ingin dicetak dengan template."
+        )
     elif template_name.lower().endswith(".docx") and not DOCX_AVAILABLE:
         st.error(
             "Modul python-docx belum terpasang di server. Jalankan "
@@ -1068,12 +1260,7 @@ with tab_data:
     else:
         is_docx_template = template_name.lower().endswith(".docx")
         fill_function = fill_docx_template if is_docx_template else fill_xlsx_template
-        file_extension = "docx" if is_docx_template else "xlsx"
-        mime_type = (
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            if is_docx_template
-            else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        to_print_html = docx_bytes_to_print_html if is_docx_template else xlsx_bytes_to_print_html
 
         def _row_label(row_index: Any) -> str:
             row = filtered_dataframe.loc[row_index]
@@ -1081,69 +1268,37 @@ with tab_data:
                 return f"{row.get('ID_Pelanggan', row_index)} - {row.get('Nama', '')}"
             return f"Baris {row_index}"
 
-        cetak_mode = st.radio(
-            "Pilih data yang ingin dicetak",
-            ["Baris tertentu", "Semua baris hasil filter"],
-            horizontal=True,
-            key="print_template_mode",
+        st.write(
+            f"📋 **{len(rows_to_print)} baris tercentang** siap dicetak dengan template "
+            f"**{template_name}**:"
         )
+        st.caption(", ".join(_row_label(index) for index in checked_row_indices))
 
-        selected_row_index = None
-        if cetak_mode == "Baris tertentu":
-            selected_row_index = st.selectbox(
-                "Pilih baris",
-                options=list(filtered_dataframe.index),
-                format_func=_row_label,
-                key="print_template_row_select",
-            )
+        print_date_fields = current_print_date_fields()
+        st.caption(f"🗓️ Tanggal cetak yang akan disisipkan: **{print_date_fields['Tanggal_Cetak']}**")
 
         if st.button(
-            "🖶 Cetak dengan Template",
+            "🖶 Siapkan Cetak dengan Template",
             use_container_width=True,
             key="btn_print_template",
         ):
             try:
-                if cetak_mode == "Baris tertentu":
-                    row_dict = filtered_dataframe.loc[selected_row_index].to_dict()
-                    result_bytes = fill_function(template_bytes, row_dict)
-                    safe_label = re.sub(
-                        r"[^A-Za-z0-9_-]+", "_", _row_label(selected_row_index)
-                    )
-                    st.session_state["print_template_result"] = {
-                        "bytes": result_bytes,
-                        "filename": f"cetak-{safe_label}.{file_extension}",
-                        "mime": mime_type,
-                    }
-                else:
-                    generated_files: dict[str, bytes] = {}
-                    for row_index in filtered_dataframe.index:
-                        row_dict = filtered_dataframe.loc[row_index].to_dict()
-                        result_bytes = fill_function(template_bytes, row_dict)
-                        safe_label = re.sub(
-                            r"[^A-Za-z0-9_-]+", "_", _row_label(row_index)
-                        )
-                        generated_files[f"{safe_label}.{file_extension}"] = result_bytes
-                    st.session_state["print_template_result"] = {
-                        "bytes": zip_documents(generated_files),
-                        "filename": "hasil-cetak-template.zip",
-                        "mime": "application/zip",
-                    }
+                pages_html: list[str] = []
+                for row_index in checked_row_indices:
+                    row_dict = filtered_dataframe.loc[row_index].to_dict()
+                    result_bytes = fill_function(template_bytes, row_dict, print_date_fields)
+                    pages_html.append(to_print_html(result_bytes))
+                st.session_state["print_template_pages"] = pages_html
                 st.success(
-                    "✅ Template berhasil diisi dengan data. Silakan unduh hasilnya di bawah."
+                    "✅ Template berhasil diisi dengan data & tanggal cetak. "
+                    "Klik tombol Print di bawah untuk mencetak."
                 )
             except Exception as error:
                 st.error(f"Gagal mengisi template: {error}")
 
-        print_result = st.session_state.get("print_template_result")
-        if print_result:
-            st.download_button(
-                "⬇️ Unduh Hasil Cetak Template",
-                data=print_result["bytes"],
-                file_name=print_result["filename"],
-                mime=print_result["mime"],
-                use_container_width=True,
-                key="download_print_template_result",
-            )
+        pages_html = st.session_state.get("print_template_pages")
+        if pages_html:
+            render_template_print_button(pages_html)
 
 with tab_summary:
     overview = pd.DataFrame(
