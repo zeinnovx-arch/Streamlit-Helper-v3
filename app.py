@@ -25,6 +25,7 @@ LOGIN_PASSWORD = "DKP.12345"
 PLN_LOGO_PATH = "attached_assets/pln-logo.svg"
 HOURS_FILTER_OPTIONS = ["Semua Data", "0–50 Jam", "50–80 Jam", "80–150 Jam"]
 ADMIN_EMAIL = "zeinnovx@gmail.com"
+ADMIN_EMAIL = "fuadmochamad2@gmail.cpm"
 
 # Folder & file untuk penyimpanan persisten (riwayat upload & riwayat pengecekan)
 DATA_DIR = "data"
@@ -36,9 +37,11 @@ INDO_MONTHS = {
     7: "Juli", 8: "Agustus", 9: "September", 10: "Oktober", 11: "November", 12: "Desember",
 }
 
-# Inisialisasi username pada session state agar bisa diubah secara dinamis
+# Inisialisasi username & password pada session state agar bisa diubah secara dinamis
 if "current_username" not in st.session_state:
     st.session_state.current_username = LOGIN_USERNAME_DEFAULT
+if "current_password" not in st.session_state:
+    st.session_state.current_password = LOGIN_PASSWORD
 
 
 # --- FUNGSI UTILITY & HELPER (UMUM) ---
@@ -648,29 +651,62 @@ def show_login() -> bool:
         submitted = st.form_submit_button("Masuk", use_container_width=True)
 
         if submitted:
-            if username == st.session_state.current_username and password == LOGIN_PASSWORD:
+            if (
+                username == st.session_state.current_username
+                and password == st.session_state.current_password
+            ):
                 st.session_state.authenticated = True
                 st.rerun()
             else:
                 st.error("Username atau password salah.")
 
-    # --- FITUR BUAT / UBAH USERNAME DI HALAMAN LOGIN (AKSES KHUSUS ZEINNOVX@GMAIL.COM) ---
-    with st.expander("🔑 Lupa / Ubah Username Admin?"):
-        st.write("Khusus admin **zeinnovx@gmail.com**, Anda dapat mendaftarkan atau merubah username baru di sini.")
-        with st.form("reset_username_form"):
-            admin_email_input = st.text_input("Masukkan Email Verifikasi Admin", placeholder="zeinnovx@gmail.com")
-            new_username_input = st.text_input("Username Baru", placeholder="Ketik username baru")
-            reset_submitted = st.form_submit_button("Simpan & Perbarui Username", use_container_width=True)
+    # --- FITUR BUAT / UBAH USERNAME & PASSWORD (AKSES KHUSUS ZEINNOVX@GMAIL.COM) ---
+    with st.expander("🔑 Lupa / Ubah Username atau Password Admin?"):
+        st.write(
+            "Khusus admin **zeinnovx@gmail.com**, Anda dapat mendaftarkan atau merubah "
+            "username baru, password baru, atau keduanya sekaligus di sini."
+        )
+        with st.form("reset_credentials_form"):
+            admin_email_input = st.text_input(
+                "Masukkan Email Verifikasi Admin", placeholder="zeinnovx@gmail.com"
+            )
+            new_username_input = st.text_input(
+                "Username Baru (kosongkan jika tidak ingin mengubah)",
+                placeholder="Ketik username baru",
+            )
+            new_password_input = st.text_input(
+                "Password Baru (kosongkan jika tidak ingin mengubah)",
+                type="password",
+                placeholder="Ketik password baru",
+            )
+            confirm_password_input = st.text_input(
+                "Konfirmasi Password Baru",
+                type="password",
+                placeholder="Ulangi password baru",
+            )
+            reset_submitted = st.form_submit_button(
+                "Simpan & Perbarui Kredensial", use_container_width=True
+            )
 
             if reset_submitted:
-                if admin_email_input.strip().lower() == ADMIN_EMAIL:
+                if admin_email_input.strip().lower() != ADMIN_EMAIL:
+                    st.error(
+                        "❌ Verifikasi Gagal! Hanya email zeinnovx@gmail.com yang dapat "
+                        "merubah username/password."
+                    )
+                elif not new_username_input.strip() and not new_password_input:
+                    st.error("⚠️ Isi minimal salah satu: username baru atau password baru.")
+                elif new_password_input and new_password_input != confirm_password_input:
+                    st.error("⚠️ Konfirmasi password baru tidak sama dengan password baru.")
+                else:
+                    updates = []
                     if new_username_input.strip():
                         st.session_state.current_username = new_username_input.strip()
-                        st.success(f"✅ Username berhasil diperbarui menjadi: **{st.session_state.current_username}**. Silakan masuk di atas.")
-                    else:
-                        st.error("⚠️ Username baru tidak boleh kosong.")
-                else:
-                    st.error("❌ Verifikasi Gagal! Hanya email zeinnovx@gmail.com yang dapat merubah username.")
+                        updates.append(f"Username baru: **{st.session_state.current_username}**")
+                    if new_password_input:
+                        st.session_state.current_password = new_password_input
+                        updates.append("Password baru berhasil disimpan.")
+                    st.success("✅ Kredensial berhasil diperbarui. " + " ".join(updates) + " Silakan masuk di atas.")
 
     return False
 
