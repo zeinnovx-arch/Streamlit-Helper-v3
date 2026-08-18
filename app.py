@@ -6,7 +6,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-
+# --- CONFIGURASI HALAMAN ---
 st.set_page_config(
     page_title="Dashboard Filter Pelanggan PLN",
     page_icon="▦",
@@ -14,13 +14,20 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# --- KONSTANTA & SESSION STATE ---
 CUSTOMER_COLUMNS = ["ID_Pelanggan", "Nama", "Daerah", "Jam_Nyala"]
-LOGIN_USERNAME = "PLNDKP@FILTER"
+LOGIN_USERNAME_DEFAULT = "PLNDKP@FILTER"
 LOGIN_PASSWORD = "DKP.12345"
 PLN_LOGO_PATH = "attached_assets/pln-logo.svg"
 HOURS_FILTER_OPTIONS = ["Semua Data", "0–50 Jam", "50–80 Jam", "80–150 Jam"]
+ADMIN_EMAIL = "zeinnovx@gmail.com"
+
+# Inisialisasi username pada session state agar bisa diubah secara dinamis
+if "current_username" not in st.session_state:
+    st.session_state.current_username = LOGIN_USERNAME_DEFAULT
 
 
+# --- FUNGSI UTILITY & HELPER ---
 def load_workbook(uploaded_file: Any) -> tuple[dict[str, pd.DataFrame], str | None]:
     """Read an uploaded CSV or Excel workbook into named dataframes."""
     try:
@@ -77,6 +84,7 @@ def is_hours_column(column: Any) -> bool:
     return normalised.casefold() == "jamnyala"
 
 
+# --- FUNGSI FILTER & LOGIKA ---
 def get_hours_filter_mask(
     series: pd.Series, widget_key: str
 ) -> tuple[pd.Series, str | None]:
@@ -96,6 +104,7 @@ def get_hours_filter_mask(
         return numeric_series.ge(50) & numeric_series.lt(80), selected_range
     if selected_range == "80–150 Jam":
         return numeric_series.ge(80) & numeric_series.le(150), selected_range
+
     return pd.Series(True, index=series.index), None
 
 
@@ -151,7 +160,6 @@ def apply_filters(
                 active_filters.append(
                     f"{column}: {format_value(selected_range[0])}–{format_value(selected_range[1])}"
                 )
-
         elif is_date_like(series):
             date_series = normalise_dates(series)
             valid_dates = date_series.dropna()
@@ -173,7 +181,6 @@ def apply_filters(
                 ) | date_series.isna()
                 if (start_date, end_date) != (minimum_date, maximum_date):
                     active_filters.append(f"{column}: {start_date}–{end_date}")
-
         else:
             values = series.dropna().astype(str)
             unique_values = sorted(values.unique().tolist())
@@ -205,7 +212,6 @@ def apply_filters(
 def apply_customer_filters(
     dataframe: pd.DataFrame,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Apply the focused customer filters from the uploaded customer workflow."""
     filtered_dataframe = dataframe.copy()
     active_filters: list[str] = []
 
@@ -244,24 +250,42 @@ def apply_customer_filters(
     filtered_dataframe = filtered_dataframe.loc[
         hours_mask.reindex(filtered_dataframe.index, fill_value=False)
     ]
+
     if pilihan_jam != "Semua Data":
         active_filters.append(f"Jam Nyala: {pilihan_jam}")
 
     return filtered_dataframe, active_filters
 
 
-def show_empty_state() -> None:
-    st.info(
-        "Unggah file Excel atau CSV melalui bilah samping untuk mulai memfilter. "
-        "File hanya digunakan selama sesi ini dan tidak disimpan."
+# --- FITUR UBAH USERNAME (ADMIN ZEINNOVX@GMAIL.COM) ---
+def render_admin_username_settings():
+    st.sidebar.divider()
+    st.sidebar.header("⚙️ Pengaturan Username Admin")
+    
+    admin_email_input = st.sidebar.text_input(
+        "Email Verifikasi Admin", 
+        placeholder="Ketik email admin di sini",
+        key="admin_email_input"
     )
-    st.subheader("Yang dapat dilakukan")
-    columns = st.columns(3)
-    columns[0].write("**Jelajahi**\n\nPilih sheet dan lihat data secara ringkas.")
-    columns[1].write("**Filter**\n\nCari di semua kolom atau gunakan filter teks, angka, dan tanggal.")
-    columns[2].write("**Ekspor**\n\nUnduh hasil filter sebagai CSV atau file Excel baru.")
+    new_username_input = st.sidebar.text_input(
+        "Username Baru", 
+        placeholder="Ketik username baru",
+        key="new_username_input"
+    )
+    
+    if st.sidebar.button("Simpan Username Baru", use_container_width=True):
+        if admin_email_input.strip().lower() == ADMIN_EMAIL:
+            if new_username_input.strip():
+                st.session_state.current_username = new_username_input.strip()
+                st.sidebar.success(f"✅ Username berhasil diperbarui menjadi: **{st.session_state.current_username}**")
+                st.rerun()
+            else:
+                st.sidebar.error("⚠️ Username baru tidak boleh kosong.")
+        else:
+            st.sidebar.error("❌ Hanya zeinnovx@gmail.com yang berhak merubah username!")
 
 
+# --- TAMPILAN HIASAN VISUAL / DEKORASI RAME ---
 def render_logo_header() -> None:
     header_left, header_right = st.columns([5, 1])
     with header_right:
@@ -376,12 +400,82 @@ def render_opening_decoration() -> None:
     )
 
 
+def render_decorative_widgets() -> None:
+    # Banner Hiasan Interaktif
+    st.markdown(
+        """
+        <div style="background: linear-gradient(135deg, #071a3b 0%, #1254a4 50%, #f6c700 100%); padding: 16px 22px; border-radius: 12px; color: white; margin-bottom: 20px;">
+            <h3 style="margin:0; color: #ffffff;">⚡ Selamat Datang di Portal Data PLN</h3>
+            <p style="margin:4px 0 0 0; opacity: 0.95; font-size: 0.95rem;">Sistem Manajemen, Filtrasi, & Pelaporan Data Pelanggan Real-Time</p>
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
+    st.toast("💡 Tip: Gunakan fitur pencarian global & cetak hasil filter secara instan!", icon="⚡")
+
+
+# --- FITUR TOMBOL PRINT / CETAK ---
+def render_print_button() -> None:
+    js_print = """
+    <style>
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            #stDataFrame, #stDataFrame * {
+                visibility: visible;
+            }
+            #stDataFrame {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+        }
+    </style>
+    <button onclick="window.print()" style="
+        background-color: #1254a4;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-weight: bold;
+        cursor: pointer;
+        margin-top: 8px;
+        margin-bottom: 8px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    ">
+        🖨️ Cetak / Print Data Hasil Filter
+    </button>
+    """
+    st.components.v1.html(js_print, height=55)
+
+
+def show_empty_state() -> None:
+    st.info(
+        "Unggah file Excel atau CSV melalui bilah samping untuk mulai memfilter. "
+        "File hanya digunakan selama sesi ini dan tidak disimpan."
+    )
+    st.subheader("Yang dapat dilakukan")
+    columns = st.columns(3)
+    columns[0].write("**Jelajahi**\n\nPilih sheet dan lihat data secara ringkas.")
+    columns[1].write(
+        "**Filter**\n\nCari di semua kolom atau gunakan filter teks, angka, dan tanggal."
+    )
+    columns[2].write("**Ekspor**\n\nUnduh hasil filter sebagai CSV atau file Excel baru.")
+
+
 def show_login() -> bool:
     if st.session_state.get("authenticated", False):
         return True
 
     st.title("Masuk ke Dashboard")
     st.caption("Silakan masukkan akun Anda untuk mengakses Dashboard Filter Pelanggan PLN.")
+
     with st.form("login_form", clear_on_submit=False):
         username = st.text_input("Username", placeholder="Masukkan username")
         password = st.text_input(
@@ -389,29 +483,41 @@ def show_login() -> bool:
         )
         submitted = st.form_submit_button("Masuk", use_container_width=True)
 
-    if submitted:
-        if username == LOGIN_USERNAME and password == LOGIN_PASSWORD:
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Username atau password salah.")
+        if submitted:
+            # Menggunakan username dinamis yang tersimpan di session_state
+            if username == st.session_state.current_username and password == LOGIN_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Username atau password salah.")
+
     return False
 
 
+# --- LOGIKA UTAMA APLIKASI ---
 render_logo_header()
+
 if not show_login():
     render_opening_decoration()
     st.stop()
 
+# Menampilkan hiasan dekorasi interaktif
+render_decorative_widgets()
+
 st.title("Dashboard Filter Pelanggan PLN")
-st.caption("Kelola, filter, dan unduh data pelanggan dengan lebih cepat.")
+st.caption("Kelola, filter, cetak, dan unduh data pelanggan dengan lebih cepat.")
 
 with st.sidebar:
     st.header("Akun")
-    st.caption(f"Masuk sebagai: {LOGIN_USERNAME}")
+    st.caption(f"Masuk sebagai: **{st.session_state.current_username}**")
     if st.button("Keluar", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
+
+# Menampilkan form ubah username khusus admin di sidebar
+render_admin_username_settings()
+
+with st.sidebar:
     st.divider()
     st.header("Muat data")
     uploaded_file = st.file_uploader(
@@ -444,12 +550,13 @@ dataframe.columns = [
 ]
 
 customer_mode = set(CUSTOMER_COLUMNS).issubset(dataframe.columns)
+
 if customer_mode:
-    st.subheader("Aplikasi Filter Data Pelanggan Excel")
-    st.caption(
+    st.sidebar.subheader("Aplikasi Filter Data Pelanggan Excel")
+    st.sidebar.caption(
         "Filter data pelanggan berdasarkan Daerah dan Jam Nyala, lalu unduh hasilnya."
     )
-    st.success("File berhasil diunggah.")
+    st.sidebar.success("File berhasil diunggah.")
     filtered_dataframe, active_filters = apply_customer_filters(dataframe)
     display_dataframe = filtered_dataframe[CUSTOMER_COLUMNS]
 else:
@@ -496,22 +603,30 @@ with tab_data:
         hide_index=True,
         height=520,
     )
-    st.download_button(
-        "Unduh hasil filter CSV",
-        data=filtered_dataframe.to_csv(index=False).encode("utf-8"),
-        file_name="hasil-filter-pelanggan.csv" if customer_mode else "filtered-data.csv",
-        mime="text/csv",
-        disabled=filtered_dataframe.empty,
-    )
-    st.download_button(
-        "Unduh hasil filter Excel",
-        data=excel_download(filtered_dataframe),
-        file_name="hasil-filter-pelanggan.xlsx"
-        if customer_mode
-        else "filtered-data.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        disabled=filtered_dataframe.empty,
-    )
+
+    # Menampilkan Tombol Print Cetak Hasil Filter
+    render_print_button()
+
+    col_csv, col_excel = st.columns(2)
+    with col_csv:
+        st.download_button(
+            "Unduh hasil filter CSV",
+            data=filtered_dataframe.to_csv(index=False).encode("utf-8"),
+            file_name="hasil-filter-pelanggan.csv" if customer_mode else "filtered-data.csv",
+            mime="text/csv",
+            disabled=filtered_dataframe.empty,
+            use_container_width=True,
+        )
+    with col_excel:
+        st.download_button(
+            "Unduh hasil filter Excel",
+            data=excel_download(filtered_dataframe),
+            file_name="hasil-filter-pelanggan.xlsx" if customer_mode else "filtered-data.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            disabled=filtered_dataframe.empty,
+            use_container_width=True,
+        )
+
     if filtered_dataframe.empty:
         st.warning("Tidak ada baris yang cocok. Coba longgarkan filter Anda.")
 
@@ -520,8 +635,13 @@ with tab_summary:
         {
             "Kolom": dataframe.columns,
             "Tipe": [str(dataframe[column].dtype) for column in dataframe.columns],
-            "Tidak kosong": [int(dataframe[column].notna().sum()) for column in dataframe.columns],
-            "Nilai unik": [int(dataframe[column].nunique(dropna=True)) for column in dataframe.columns],
+            "Tidak kosong": [
+                int(dataframe[column].notna().sum()) for column in dataframe.columns
+            ],
+            "Nilai unik": [
+                int(dataframe[column].nunique(dropna=True))
+                for column in dataframe.columns
+            ],
         }
     )
     st.dataframe(overview, use_container_width=True, hide_index=True)
