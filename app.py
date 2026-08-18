@@ -25,7 +25,8 @@ LOGIN_PASSWORD = "DKP.12345"
 PLN_LOGO_PATH = "attached_assets/pln-logo.svg"
 HOURS_FILTER_OPTIONS = ["Semua Data", "0–50 Jam", "50–80 Jam", "80–150 Jam"]
 ADMIN_EMAIL = "zeinnovx@gmail.com"
-ADMIN_EMAIL = "fuadmochamad2@gmail.cpm"
+ADMIN_EMAIL = "fuadmochamad2@gmail.com"
+ADMIN_EMAIL = "watangdanu@gmail.com"
 
 # Folder & file untuk penyimpanan persisten (riwayat upload & riwayat pengecekan)
 DATA_DIR = "data"
