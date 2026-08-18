@@ -666,9 +666,8 @@ def show_login() -> bool:
     # --- FITUR BUAT / UBAH USERNAME & PASSWORD (AKSES KHUSUS EMAIL ADMIN TERDAFTAR) ---
     with st.expander("🔑 Lupa / Ubah Username atau Password Admin?"):
         st.write(
-            "Khusus admin terdaftar (**" + ", ".join(sorted(ADMIN_EMAILS)) + "**), "
-            "Anda dapat mendaftarkan atau merubah username baru, password baru, "
-            "atau keduanya sekaligus di sini."
+            "Khusus admin terdaftar, Anda dapat mendaftarkan atau merubah username baru, "
+            "password baru, atau keduanya sekaligus di sini."
         )
         with st.form("reset_credentials_form"):
             admin_email_input = st.text_input(
