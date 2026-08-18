@@ -3,12 +3,21 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import zipfile
 from datetime import datetime
 from io import BytesIO
 from typing import Any
 
+import openpyxl
 import pandas as pd
 import streamlit as st
+
+try:
+    from docx import Document as DocxDocument
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
@@ -106,6 +115,95 @@ def is_hours_column(column: Any) -> bool:
 
 def format_indonesian_date(date_obj) -> str:
     return f"{date_obj.day} {INDO_MONTHS[date_obj.month]} {date_obj.year}"
+
+
+# --- FUNGSI FITUR CETAK DENGAN TEMPLATE (WORD/EXCEL) ---
+PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
+
+
+def normalize_placeholder_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name).casefold())
+
+
+def build_placeholder_map(row: dict[str, Any]) -> dict[str, str]:
+    return {
+        normalize_placeholder_key(column): format_value(value)
+        for column, value in row.items()
+    }
+
+
+def substitute_placeholders(text: str, value_map: dict[str, str]) -> str:
+    def _replace(match: re.Match) -> str:
+        key = normalize_placeholder_key(match.group(1))
+        return value_map.get(key, match.group(0))
+
+    return PLACEHOLDER_PATTERN.sub(_replace, text)
+
+
+def _replace_in_docx_paragraph(paragraph: Any, value_map: dict[str, str]) -> None:
+    full_text = "".join(run.text for run in paragraph.runs)
+    if "{" not in full_text:
+        return
+    new_text = substitute_placeholders(full_text, value_map)
+    if new_text == full_text:
+        return
+    if paragraph.runs:
+        paragraph.runs[0].text = new_text
+        for run in paragraph.runs[1:]:
+            run.text = ""
+    else:
+        paragraph.text = new_text
+
+
+def fill_docx_template(template_bytes: bytes, row: dict[str, Any]) -> bytes:
+    """Isi placeholder {NamaKolom} pada template Word dengan data satu baris."""
+    if not DOCX_AVAILABLE:
+        raise RuntimeError(
+            "Modul python-docx belum terpasang. Jalankan `pip install python-docx`."
+        )
+    value_map = build_placeholder_map(row)
+    document = DocxDocument(BytesIO(template_bytes))
+
+    for paragraph in document.paragraphs:
+        _replace_in_docx_paragraph(paragraph, value_map)
+
+    for table in document.tables:
+        for table_row in table.rows:
+            for cell in table_row.cells:
+                for paragraph in cell.paragraphs:
+                    _replace_in_docx_paragraph(paragraph, value_map)
+
+    for section in document.sections:
+        for paragraph in list(section.header.paragraphs) + list(section.footer.paragraphs):
+            _replace_in_docx_paragraph(paragraph, value_map)
+
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def fill_xlsx_template(template_bytes: bytes, row: dict[str, Any]) -> bytes:
+    """Isi placeholder {NamaKolom} pada template Excel dengan data satu baris."""
+    value_map = build_placeholder_map(row)
+    workbook = openpyxl.load_workbook(BytesIO(template_bytes))
+
+    for sheet in workbook.worksheets:
+        for sheet_row in sheet.iter_rows():
+            for cell in sheet_row:
+                if isinstance(cell.value, str) and "{" in cell.value:
+                    cell.value = substitute_placeholders(cell.value, value_map)
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def zip_documents(files: dict[str, bytes]) -> bytes:
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for filename, content in files.items():
+            zip_file.writestr(filename, content)
+    return output.getvalue()
 
 
 # --- FUNGSI PENYIMPANAN PERSISTEN: RIWAYAT FILE UPLOAD ---
@@ -743,6 +841,33 @@ with st.sidebar:
         help="Format yang didukung: .xlsx, .xls, dan .csv",
     )
 
+with st.sidebar:
+    st.divider()
+    st.header("Template Cetak (Opsional)")
+    st.caption(
+        "Unggah template Word (.docx) atau Excel (.xlsx) yang berisi placeholder "
+        "seperti {Nama}, {Daerah}, {Jam_Nyala}, {ID_Pelanggan} — sesuai nama kolom "
+        "pada data Anda. Placeholder ini akan otomatis diganti dengan data saat "
+        "tombol cetak diklik."
+    )
+    template_file = st.file_uploader(
+        "Pilih file template (.docx / .xlsx)",
+        type=["docx", "xlsx"],
+        key="template_uploader",
+    )
+    if template_file is not None:
+        st.session_state.print_template_bytes = template_file.getvalue()
+        st.session_state.print_template_name = template_file.name
+        st.session_state.pop("print_template_result", None)
+
+    if st.session_state.get("print_template_bytes"):
+        st.caption(f"📄 Template aktif: **{st.session_state.get('print_template_name')}**")
+        if st.button("🗑️ Hapus Template", use_container_width=True):
+            st.session_state.pop("print_template_bytes", None)
+            st.session_state.pop("print_template_name", None)
+            st.session_state.pop("print_template_result", None)
+            st.rerun()
+
 # --- LOGIKA RIWAYAT UPLOAD (FILE TERSIMPAN DI DASHBOARD) ---
 cached_meta = load_upload_cache_meta()
 loaded_from_cache = False
@@ -919,6 +1044,106 @@ with tab_data:
 
     if filtered_dataframe.empty:
         st.warning("Tidak ada baris yang cocok. Coba longgarkan filter Anda.")
+
+    # --- FITUR CETAK DENGAN TEMPLATE (WORD/EXCEL) ---
+    st.divider()
+    st.subheader("🖶 Cetak dengan Template")
+
+    template_bytes = st.session_state.get("print_template_bytes")
+    template_name = st.session_state.get("print_template_name", "")
+
+    if not template_bytes:
+        st.info(
+            "Unggah template Word (.docx) atau Excel (.xlsx) pada bilah samping "
+            "untuk mengisi otomatis data ke dalam format cetak Anda sendiri."
+        )
+    elif filtered_dataframe.empty:
+        st.info("Tidak ada data hasil filter untuk dicetak dari template.")
+    elif template_name.lower().endswith(".docx") and not DOCX_AVAILABLE:
+        st.error(
+            "Modul python-docx belum terpasang di server. Jalankan "
+            "`pip install python-docx` lalu jalankan ulang aplikasi untuk memakai "
+            "template Word. Template Excel (.xlsx) tetap bisa digunakan."
+        )
+    else:
+        is_docx_template = template_name.lower().endswith(".docx")
+        fill_function = fill_docx_template if is_docx_template else fill_xlsx_template
+        file_extension = "docx" if is_docx_template else "xlsx"
+        mime_type = (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if is_docx_template
+            else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        def _row_label(row_index: Any) -> str:
+            row = filtered_dataframe.loc[row_index]
+            if customer_mode:
+                return f"{row.get('ID_Pelanggan', row_index)} - {row.get('Nama', '')}"
+            return f"Baris {row_index}"
+
+        cetak_mode = st.radio(
+            "Pilih data yang ingin dicetak",
+            ["Baris tertentu", "Semua baris hasil filter"],
+            horizontal=True,
+            key="print_template_mode",
+        )
+
+        selected_row_index = None
+        if cetak_mode == "Baris tertentu":
+            selected_row_index = st.selectbox(
+                "Pilih baris",
+                options=list(filtered_dataframe.index),
+                format_func=_row_label,
+                key="print_template_row_select",
+            )
+
+        if st.button(
+            "🖶 Cetak dengan Template",
+            use_container_width=True,
+            key="btn_print_template",
+        ):
+            try:
+                if cetak_mode == "Baris tertentu":
+                    row_dict = filtered_dataframe.loc[selected_row_index].to_dict()
+                    result_bytes = fill_function(template_bytes, row_dict)
+                    safe_label = re.sub(
+                        r"[^A-Za-z0-9_-]+", "_", _row_label(selected_row_index)
+                    )
+                    st.session_state["print_template_result"] = {
+                        "bytes": result_bytes,
+                        "filename": f"cetak-{safe_label}.{file_extension}",
+                        "mime": mime_type,
+                    }
+                else:
+                    generated_files: dict[str, bytes] = {}
+                    for row_index in filtered_dataframe.index:
+                        row_dict = filtered_dataframe.loc[row_index].to_dict()
+                        result_bytes = fill_function(template_bytes, row_dict)
+                        safe_label = re.sub(
+                            r"[^A-Za-z0-9_-]+", "_", _row_label(row_index)
+                        )
+                        generated_files[f"{safe_label}.{file_extension}"] = result_bytes
+                    st.session_state["print_template_result"] = {
+                        "bytes": zip_documents(generated_files),
+                        "filename": "hasil-cetak-template.zip",
+                        "mime": "application/zip",
+                    }
+                st.success(
+                    "✅ Template berhasil diisi dengan data. Silakan unduh hasilnya di bawah."
+                )
+            except Exception as error:
+                st.error(f"Gagal mengisi template: {error}")
+
+        print_result = st.session_state.get("print_template_result")
+        if print_result:
+            st.download_button(
+                "⬇️ Unduh Hasil Cetak Template",
+                data=print_result["bytes"],
+                file_name=print_result["filename"],
+                mime=print_result["mime"],
+                use_container_width=True,
+                key="download_print_template_result",
+            )
 
 with tab_summary:
     overview = pd.DataFrame(
