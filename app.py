@@ -295,21 +295,24 @@ def xlsx_bytes_to_print_html(filled_xlsx_bytes: bytes) -> str:
 
 
 def render_template_print_button(pages_html: list[str]) -> None:
-    """Tampilkan tombol Print yang membuka dialog cetak browser untuk hasil template terisi."""
-    combined_pages = "\n".join(
-        f'<div class="doc-page-wrapper{" page-break" if index > 0 else ""}">{page}</div>'
-        for index, page in enumerate(pages_html)
-    )
+    """Tampilkan tombol Print yang membuka dialog cetak browser untuk hasil template terisi.
+
+    Semua baris tercentang (dari kategori/sheet manapun) digabung menjadi SATU halaman
+    cetak saja — tidak dipisah per baris, tidak ada page-break di antaranya. Format
+    template (paragraf & tabel) tetap sama persis, hanya disusun berurutan dalam satu
+    halaman.
+    """
+    combined_pages = "\n".join(pages_html)
 
     print_html = f"""
     <style>
-        .doc-page-wrapper {{
+        .doc-page {{
             font-family: Arial, sans-serif;
             font-size: 13px;
             color: #1a1a1a;
-            padding: 12px 4px;
+            padding: 4px 4px 0;
         }}
-        .doc-page-wrapper p {{
+        .doc-page p {{
             margin: 4px 0;
         }}
         .doc-table {{
@@ -330,7 +333,6 @@ def render_template_print_button(pages_html: list[str]) -> None:
                 top: 0;
                 width: 100%;
             }}
-            .page-break {{ page-break-before: always; }}
             .no-print {{ display: none !important; }}
         }}
     </style>
@@ -1224,20 +1226,26 @@ with tab_data:
     st.divider()
     st.subheader("🖶 Cetak dengan Template")
     st.caption(
-        "Fitur ini otomatis mengambil baris yang sudah Anda **centang (Cek)** di tabel "
-        "atas, mengisi template dengan datanya, menyisipkan **tanggal cetak hari ini**, "
-        "lalu langsung menyiapkannya untuk **Print** lewat browser (bukan unduh file)."
+        "Fitur ini otomatis mengambil baris yang **dicentang (Cek) pada hari ini**, "
+        "mengisi template dengan datanya, menyisipkan **tanggal cetak hari ini**, lalu "
+        "langsung menyiapkannya untuk **Print** lewat browser (bukan unduh file). "
+        "Baris yang dicentang di hari-hari sebelumnya tidak akan ikut tercetak lagi — "
+        "hanya centangan hari ini yang dipakai."
     )
 
     template_bytes = st.session_state.get("print_template_bytes")
     template_name = st.session_state.get("print_template_name", "")
 
-    # Ambil hanya baris yang sudah dicentang (Cek = True) dari riwayat pengecekan
+    # Ambil hanya baris yang dicentang (Cek = True) DAN tanggal centangnya = hari ini
     checked_log = load_checked_log()
+    today_iso = datetime.now().date().isoformat()
     checked_row_indices = [
         row_index
         for row_index in filtered_dataframe.index
-        if compute_row_key(filtered_dataframe.loc[row_index], customer_mode) in checked_log
+        if checked_log.get(
+            compute_row_key(filtered_dataframe.loc[row_index], customer_mode)
+        )
+        == today_iso
     ]
     rows_to_print = filtered_dataframe.loc[checked_row_indices]
 
@@ -1248,8 +1256,9 @@ with tab_data:
         )
     elif rows_to_print.empty:
         st.info(
-            "Belum ada baris yang dicentang (✅ **Cek**) pada tabel di atas. "
-            "Centang dulu baris yang ingin dicetak dengan template."
+            "Belum ada baris yang dicentang (✅ **Cek**) **hari ini**. Centangan dari "
+            "hari-hari sebelumnya tidak otomatis ikut — centang dulu baris yang ingin "
+            "dicetak hari ini pada tabel di atas."
         )
     elif template_name.lower().endswith(".docx") and not DOCX_AVAILABLE:
         st.error(
