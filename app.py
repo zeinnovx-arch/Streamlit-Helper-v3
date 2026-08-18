@@ -24,9 +24,11 @@ LOGIN_USERNAME_DEFAULT = "PLNDKP@FILTER"
 LOGIN_PASSWORD = "DKP.12345"
 PLN_LOGO_PATH = "attached_assets/pln-logo.svg"
 HOURS_FILTER_OPTIONS = ["Semua Data", "0–50 Jam", "50–80 Jam", "80–150 Jam"]
-ADMIN_EMAIL = "zeinnovx@gmail.com"
-ADMIN_EMAIL = "fuadmochamad2@gmail.com"
-ADMIN_EMAIL = "watangdanu@gmail.com"
+ADMIN_EMAILS = {
+    "zeinnovx@gmail.com",
+    "fuadmochamad2@gmail.com",
+    "watangdanu@gmail.com",
+}
 
 # Folder & file untuk penyimpanan persisten (riwayat upload & riwayat pengecekan)
 DATA_DIR = "data"
@@ -661,15 +663,16 @@ def show_login() -> bool:
             else:
                 st.error("Username atau password salah.")
 
-    # --- FITUR BUAT / UBAH USERNAME & PASSWORD (AKSES KHUSUS ZEINNOVX@GMAIL.COM) ---
+    # --- FITUR BUAT / UBAH USERNAME & PASSWORD (AKSES KHUSUS EMAIL ADMIN TERDAFTAR) ---
     with st.expander("🔑 Lupa / Ubah Username atau Password Admin?"):
         st.write(
-            "Khusus admin **zeinnovx@gmail.com**, Anda dapat mendaftarkan atau merubah "
-            "username baru, password baru, atau keduanya sekaligus di sini."
+            "Khusus admin terdaftar (**" + ", ".join(sorted(ADMIN_EMAILS)) + "**), "
+            "Anda dapat mendaftarkan atau merubah username baru, password baru, "
+            "atau keduanya sekaligus di sini."
         )
         with st.form("reset_credentials_form"):
             admin_email_input = st.text_input(
-                "Masukkan Email Verifikasi Admin", placeholder="zeinnovx@gmail.com"
+                "Masukkan Email Verifikasi Admin", placeholder="nama@gmail.com"
             )
             new_username_input = st.text_input(
                 "Username Baru (kosongkan jika tidak ingin mengubah)",
@@ -690,9 +693,9 @@ def show_login() -> bool:
             )
 
             if reset_submitted:
-                if admin_email_input.strip().lower() != ADMIN_EMAIL:
+                if admin_email_input.strip().lower() not in ADMIN_EMAILS:
                     st.error(
-                        "❌ Verifikasi Gagal! Hanya email zeinnovx@gmail.com yang dapat "
+                        "❌ Verifikasi Gagal! Hanya email admin terdaftar yang dapat "
                         "merubah username/password."
                     )
                 elif not new_username_input.strip() and not new_password_input:
