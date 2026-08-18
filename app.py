@@ -1226,28 +1226,33 @@ with tab_data:
     st.divider()
     st.subheader("🖶 Cetak dengan Template")
     st.caption(
-        "Fitur ini otomatis mengambil baris yang **dicentang (Cek) pada hari ini**, "
-        "mengisi template dengan datanya, menyisipkan **tanggal cetak hari ini**, lalu "
-        "langsung menyiapkannya untuk **Print** lewat browser (bukan unduh file). "
-        "Baris yang dicentang di hari-hari sebelumnya tidak akan ikut tercetak lagi — "
-        "hanya centangan hari ini yang dipakai."
+        "Fitur ini otomatis mengambil **semua baris yang dicentang (Cek) hari ini**, "
+        "walaupun Anda mencentangnya di kategori/filter yang berbeda-beda (misalnya "
+        "gonta-ganti filter JAMNYALA 0–50, 50–80, 80–150) — semua tetap terdeteksi dan "
+        "digabung jadi satu. Lalu mengisi template dengan datanya, menyisipkan "
+        "**tanggal cetak hari ini**, dan menyiapkannya untuk **Print** lewat browser "
+        "(bukan unduh file). Baris yang dicentang di hari-hari sebelumnya tidak akan "
+        "ikut tercetak lagi — hanya centangan hari ini yang dipakai."
     )
 
     template_bytes = st.session_state.get("print_template_bytes")
     template_name = st.session_state.get("print_template_name", "")
 
-    # Ambil hanya baris yang dicentang (Cek = True) DAN tanggal centangnya = hari ini
+    # Ambil baris yang dicentang (Cek = True) & tanggal centangnya = hari ini, dari
+    # SELURUH data di sheet ini — bukan cuma yang sedang tampil di filter saat ini.
+    # Jadi kalau Anda centang baris saat filter JAMNYALA "0–50 Jam", lalu ganti filter
+    # ke "50–80 Jam" dan centang beberapa baris lagi, semuanya tetap terdeteksi jadi 1.
     checked_log = load_checked_log()
     today_iso = datetime.now().date().isoformat()
     checked_row_indices = [
         row_index
-        for row_index in filtered_dataframe.index
+        for row_index in dataframe.index
         if checked_log.get(
-            compute_row_key(filtered_dataframe.loc[row_index], customer_mode)
+            compute_row_key(dataframe.loc[row_index], customer_mode)
         )
         == today_iso
     ]
-    rows_to_print = filtered_dataframe.loc[checked_row_indices]
+    rows_to_print = dataframe.loc[checked_row_indices]
 
     if not template_bytes:
         st.info(
@@ -1272,7 +1277,7 @@ with tab_data:
         to_print_html = docx_bytes_to_print_html if is_docx_template else xlsx_bytes_to_print_html
 
         def _row_label(row_index: Any) -> str:
-            row = filtered_dataframe.loc[row_index]
+            row = dataframe.loc[row_index]
             if customer_mode:
                 return f"{row.get('ID_Pelanggan', row_index)} - {row.get('Nama', '')}"
             return f"Baris {row_index}"
@@ -1294,7 +1299,7 @@ with tab_data:
             try:
                 pages_html: list[str] = []
                 for row_index in checked_row_indices:
-                    row_dict = filtered_dataframe.loc[row_index].to_dict()
+                    row_dict = dataframe.loc[row_index].to_dict()
                     result_bytes = fill_function(template_bytes, row_dict, print_date_fields)
                     pages_html.append(to_print_html(result_bytes))
                 st.session_state["print_template_pages"] = pages_html
