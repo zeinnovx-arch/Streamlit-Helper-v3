@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+from datetime import datetime
 from io import BytesIO
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
-# --- CONFIGURASI HALAMAN ---
+# --- KONFIGURASI HALAMAN ---
 st.set_page_config(
     page_title="Dashboard Filter Pelanggan PLN",
     page_icon="▦",
@@ -22,12 +26,22 @@ PLN_LOGO_PATH = "attached_assets/pln-logo.svg"
 HOURS_FILTER_OPTIONS = ["Semua Data", "0–50 Jam", "50–80 Jam", "80–150 Jam"]
 ADMIN_EMAIL = "zeinnovx@gmail.com"
 
+# Folder & file untuk penyimpanan persisten (riwayat upload & riwayat pengecekan)
+DATA_DIR = "data"
+UPLOAD_CACHE_META_PATH = os.path.join(DATA_DIR, "upload_meta.json")
+CHECKED_LOG_PATH = os.path.join(DATA_DIR, "checked_log.json")
+
+INDO_MONTHS = {
+    1: "Januari", 2: "Februari", 3: "Maret", 4: "April", 5: "Mei", 6: "Juni",
+    7: "Juli", 8: "Agustus", 9: "September", 10: "Oktober", 11: "November", 12: "Desember",
+}
+
 # Inisialisasi username pada session state agar bisa diubah secara dinamis
 if "current_username" not in st.session_state:
     st.session_state.current_username = LOGIN_USERNAME_DEFAULT
 
 
-# --- FUNGSI UTILITY & HELPER ---
+# --- FUNGSI UTILITY & HELPER (UMUM) ---
 def load_workbook(uploaded_file: Any) -> tuple[dict[str, pd.DataFrame], str | None]:
     """Read an uploaded CSV or Excel workbook into named dataframes."""
     try:
@@ -82,6 +96,138 @@ def format_value(value: Any) -> str:
 def is_hours_column(column: Any) -> bool:
     normalised = "".join(character for character in str(column) if character.isalnum())
     return normalised.casefold() == "jamnyala"
+
+
+def format_indonesian_date(date_obj) -> str:
+    return f"{date_obj.day} {INDO_MONTHS[date_obj.month]} {date_obj.year}"
+
+
+# --- FUNGSI PENYIMPANAN PERSISTEN: RIWAYAT FILE UPLOAD ---
+class CachedUploadedFile:
+    """Wrapper agar file yang dimuat ulang dari disk kompatibel dengan load_workbook()."""
+
+    def __init__(self, path: str, name: str) -> None:
+        self._path = path
+        self.name = name
+
+    def getvalue(self) -> bytes:
+        with open(self._path, "rb") as file:
+            return file.read()
+
+
+def _cache_file_path_for(filename: str) -> str:
+    ext = os.path.splitext(filename)[1] or ".dat"
+    return os.path.join(DATA_DIR, f"cached_upload{ext}")
+
+
+def save_uploaded_file_to_cache(uploaded_file: Any) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    # Bersihkan file cache lama (kalau ekstensinya beda dari sebelumnya)
+    for existing_name in os.listdir(DATA_DIR):
+        if existing_name.startswith("cached_upload"):
+            os.remove(os.path.join(DATA_DIR, existing_name))
+
+    cache_path = _cache_file_path_for(uploaded_file.name)
+    with open(cache_path, "wb") as file:
+        file.write(uploaded_file.getvalue())
+
+    meta = {
+        "filename": uploaded_file.name,
+        "uploaded_at": datetime.now().isoformat(),
+        "cache_path": cache_path,
+    }
+    with open(UPLOAD_CACHE_META_PATH, "w", encoding="utf-8") as file:
+        json.dump(meta, file, ensure_ascii=False, indent=2)
+
+
+def load_upload_cache_meta() -> dict | None:
+    if not os.path.exists(UPLOAD_CACHE_META_PATH):
+        return None
+    try:
+        with open(UPLOAD_CACHE_META_PATH, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except Exception:
+        return None
+
+
+def load_cached_uploaded_file() -> Any | None:
+    meta = load_upload_cache_meta()
+    if not meta or not os.path.exists(meta.get("cache_path", "")):
+        return None
+    return CachedUploadedFile(meta["cache_path"], meta["filename"])
+
+
+def clear_upload_history() -> None:
+    """Hapus file tersimpan & reset riwayat pengecekan (dipanggil manual oleh pengguna)."""
+    if os.path.exists(UPLOAD_CACHE_META_PATH):
+        os.remove(UPLOAD_CACHE_META_PATH)
+    if os.path.isdir(DATA_DIR):
+        for existing_name in os.listdir(DATA_DIR):
+            if existing_name.startswith("cached_upload"):
+                os.remove(os.path.join(DATA_DIR, existing_name))
+    save_checked_log({})
+
+
+# --- FUNGSI PENYIMPANAN PERSISTEN: RIWAYAT PENGECEKAN PER BARIS ---
+def load_checked_log() -> dict[str, str]:
+    if not os.path.exists(CHECKED_LOG_PATH):
+        return {}
+    try:
+        with open(CHECKED_LOG_PATH, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except Exception:
+        return {}
+
+
+def save_checked_log(log: dict[str, str]) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(CHECKED_LOG_PATH, "w", encoding="utf-8") as file:
+        json.dump(log, file, ensure_ascii=False, indent=2)
+
+
+def compute_row_key(row: pd.Series, customer_mode: bool) -> str:
+    """Kunci unik per baris. Pakai ID_Pelanggan kalau ada, kalau tidak pakai hash isi baris."""
+    if customer_mode and "ID_Pelanggan" in row.index:
+        return f"id:{row['ID_Pelanggan']}"
+    raw = "|".join(str(row[column]) for column in row.index)
+    return "hash:" + hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def build_checkable_table(display_df: pd.DataFrame, customer_mode: bool) -> pd.DataFrame:
+    """Tambahkan kolom 'Cek' & 'Status Pengecekan' berdasarkan riwayat yang tersimpan."""
+    checked_log = load_checked_log()
+    row_keys = [compute_row_key(row, customer_mode) for _, row in display_df.iterrows()]
+
+    table = display_df.copy()
+    table.index = row_keys
+    table.insert(0, "Cek", [key in checked_log for key in row_keys])
+    table["Status Pengecekan"] = [
+        f"Sudah dicek pada tanggal {format_indonesian_date(datetime.fromisoformat(checked_log[key]).date())}"
+        if key in checked_log
+        else "Belum dicek"
+        for key in row_keys
+    ]
+    return table
+
+
+def sync_checked_log_from_editor(edited_table: pd.DataFrame) -> bool:
+    """Bandingkan hasil editan kolom 'Cek' dengan riwayat tersimpan, lalu simpan bila berubah."""
+    current_log = load_checked_log()
+    today_iso = datetime.now().date().isoformat()
+    changed = False
+
+    for row_key, is_checked in zip(edited_table.index, edited_table["Cek"]):
+        was_checked = row_key in current_log
+        if is_checked and not was_checked:
+            current_log[row_key] = today_iso
+            changed = True
+        elif not is_checked and was_checked:
+            del current_log[row_key]
+            changed = True
+
+    if changed:
+        save_checked_log(current_log)
+    return changed
 
 
 # --- FUNGSI FILTER & LOGIKA ---
@@ -257,35 +403,7 @@ def apply_customer_filters(
     return filtered_dataframe, active_filters
 
 
-# --- FITUR UBAH USERNAME (ADMIN ZEINNOVX@GMAIL.COM) ---
-def render_admin_username_settings():
-    st.sidebar.divider()
-    st.sidebar.header("⚙️ Pengaturan Username Admin")
-    
-    admin_email_input = st.sidebar.text_input(
-        "Email Verifikasi Admin", 
-        placeholder="Ketik email admin di sini",
-        key="admin_email_input"
-    )
-    new_username_input = st.sidebar.text_input(
-        "Username Baru", 
-        placeholder="Ketik username baru",
-        key="new_username_input"
-    )
-    
-    if st.sidebar.button("Simpan Username Baru", use_container_width=True):
-        if admin_email_input.strip().lower() == ADMIN_EMAIL:
-            if new_username_input.strip():
-                st.session_state.current_username = new_username_input.strip()
-                st.sidebar.success(f"✅ Username berhasil diperbarui menjadi: **{st.session_state.current_username}**")
-                st.rerun()
-            else:
-                st.sidebar.error("⚠️ Username baru tidak boleh kosong.")
-        else:
-            st.sidebar.error("❌ Hanya zeinnovx@gmail.com yang berhak merubah username!")
-
-
-# --- TAMPILAN HIASAN VISUAL / DEKORASI RAME ---
+# --- TAMPILAN HIASAN VISUAL / DEKORASI ---
 def render_logo_header() -> None:
     header_left, header_right = st.columns([5, 1])
     with header_right:
@@ -401,64 +519,109 @@ def render_opening_decoration() -> None:
 
 
 def render_decorative_widgets() -> None:
-    # Banner Hiasan Interaktif
     st.markdown(
         """
         <div style="background: linear-gradient(135deg, #071a3b 0%, #1254a4 50%, #f6c700 100%); padding: 16px 22px; border-radius: 12px; color: white; margin-bottom: 20px;">
             <h3 style="margin:0; color: #ffffff;">⚡ Selamat Datang di Portal Data PLN</h3>
             <p style="margin:4px 0 0 0; opacity: 0.95; font-size: 0.95rem;">Sistem Manajemen, Filtrasi, & Pelaporan Data Pelanggan Real-Time</p>
         </div>
-        """, 
+        """,
         unsafe_allow_html=True
     )
-    st.toast("💡 Tip: Gunakan fitur pencarian global & cetak hasil filter secara instan!", icon="⚡")
+    st.toast("💡 Tip: Centang kolom 'Cek' untuk menandai data yang sudah diverifikasi!", icon="⚡")
 
 
-# --- FITUR TOMBOL PRINT / CETAK ---
-def render_print_button() -> None:
-    js_print = """
+# --- FITUR TOMBOL PRINT / CETAK TERHUBUNG DATA EXCEL ---
+def render_print_button(df_to_print: pd.DataFrame) -> None:
+    """Mencetak data Excel yang sudah difilter secara bersih dan responsif."""
+    html_table = df_to_print.to_html(index=False, classes="print-table")
+
+    js_print = f"""
     <style>
-        @media print {
-            body * {
+        .print-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+        }}
+        .print-table th {{
+            background-color: #1254a4;
+            color: white;
+            padding: 8px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }}
+        .print-table td {{
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+        }}
+        .print-table tr:nth-child(even) {{
+            background-color: #f9f9f9;
+        }}
+
+        @media print {{
+            body * {{
                 visibility: hidden;
-            }
-            #stDataFrame, #stDataFrame * {
+            }}
+            #print-area, #print-area * {{
                 visibility: visible;
-            }
-            #stDataFrame {
+            }}
+            #print-area {{
                 position: absolute;
                 left: 0;
                 top: 0;
                 width: 100%;
-            }
-        }
+            }}
+            .no-print {{
+                display: none !important;
+            }}
+        }}
     </style>
-    <button onclick="window.print()" style="
-        background-color: #1254a4;
-        color: white;
-        border: none;
-        padding: 10px 20px;
-        border-radius: 8px;
-        font-weight: bold;
-        cursor: pointer;
-        margin-top: 8px;
-        margin-bottom: 8px;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 14px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    ">
-        🖨️ Cetak / Print Data Hasil Filter
-    </button>
+
+    <div class="no-print">
+        <button onclick="window.print()" style="
+            background-color: #1254a4;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 5px;
+            margin-bottom: 15px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        ">
+            🖨️ Cetak / Print Tabel Excel Terfilter
+        </button>
+    </div>
+
+    <div id="print-area" style="display: none;">
+        <h2 style="text-align: center; color: #071a3b;">Laporan Data Pelanggan PLN (Hasil Filter)</h2>
+        <hr>
+        {html_table}
+    </div>
+
+    <script>
+        window.onbeforeprint = function() {{
+            document.getElementById('print-area').style.display = 'block';
+        }};
+        window.onafterprint = function() {{
+            document.getElementById('print-area').style.display = 'none';
+        }};
+    </script>
     """
-    st.components.v1.html(js_print, height=55)
+    st.components.v1.html(js_print, height=65)
 
 
 def show_empty_state() -> None:
     st.info(
         "Unggah file Excel atau CSV melalui bilah samping untuk mulai memfilter. "
-        "File hanya digunakan selama sesi ini dan tidak disimpan."
+        "Setelah diunggah, file ini akan tersimpan otomatis di dashboard sehingga "
+        "tidak hilang saat halaman dibuka kembali."
     )
     st.subheader("Yang dapat dilakukan")
     columns = st.columns(3)
@@ -466,9 +629,10 @@ def show_empty_state() -> None:
     columns[1].write(
         "**Filter**\n\nCari di semua kolom atau gunakan filter teks, angka, dan tanggal."
     )
-    columns[2].write("**Ekspor**\n\nUnduh hasil filter sebagai CSV atau file Excel baru.")
+    columns[2].write("**Cek & Ekspor**\n\nTandai data yang sudah diverifikasi, lalu unduh hasil filter.")
 
 
+# --- HALAMAN LOGIN DENGAN FITUR LUPA / RESET USERNAME ---
 def show_login() -> bool:
     if st.session_state.get("authenticated", False):
         return True
@@ -484,12 +648,29 @@ def show_login() -> bool:
         submitted = st.form_submit_button("Masuk", use_container_width=True)
 
         if submitted:
-            # Menggunakan username dinamis yang tersimpan di session_state
             if username == st.session_state.current_username and password == LOGIN_PASSWORD:
                 st.session_state.authenticated = True
                 st.rerun()
             else:
                 st.error("Username atau password salah.")
+
+    # --- FITUR BUAT / UBAH USERNAME DI HALAMAN LOGIN (AKSES KHUSUS ZEINNOVX@GMAIL.COM) ---
+    with st.expander("🔑 Lupa / Ubah Username Admin?"):
+        st.write("Khusus admin **zeinnovx@gmail.com**, Anda dapat mendaftarkan atau merubah username baru di sini.")
+        with st.form("reset_username_form"):
+            admin_email_input = st.text_input("Masukkan Email Verifikasi Admin", placeholder="zeinnovx@gmail.com")
+            new_username_input = st.text_input("Username Baru", placeholder="Ketik username baru")
+            reset_submitted = st.form_submit_button("Simpan & Perbarui Username", use_container_width=True)
+
+            if reset_submitted:
+                if admin_email_input.strip().lower() == ADMIN_EMAIL:
+                    if new_username_input.strip():
+                        st.session_state.current_username = new_username_input.strip()
+                        st.success(f"✅ Username berhasil diperbarui menjadi: **{st.session_state.current_username}**. Silakan masuk di atas.")
+                    else:
+                        st.error("⚠️ Username baru tidak boleh kosong.")
+                else:
+                    st.error("❌ Verifikasi Gagal! Hanya email zeinnovx@gmail.com yang dapat merubah username.")
 
     return False
 
@@ -505,7 +686,7 @@ if not show_login():
 render_decorative_widgets()
 
 st.title("Dashboard Filter Pelanggan PLN")
-st.caption("Kelola, filter, cetak, dan unduh data pelanggan dengan lebih cepat.")
+st.caption("Kelola, filter, cek, cetak, dan unduh data pelanggan dengan lebih cepat.")
 
 with st.sidebar:
     st.header("Akun")
@@ -513,9 +694,6 @@ with st.sidebar:
     if st.button("Keluar", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
-
-# Menampilkan form ubah username khusus admin di sidebar
-render_admin_username_settings()
 
 with st.sidebar:
     st.divider()
@@ -526,9 +704,58 @@ with st.sidebar:
         help="Format yang didukung: .xlsx, .xls, dan .csv",
     )
 
+# --- LOGIKA RIWAYAT UPLOAD (FILE TERSIMPAN DI DASHBOARD) ---
+cached_meta = load_upload_cache_meta()
+loaded_from_cache = False
+
+if uploaded_file is not None:
+    upload_signature = (uploaded_file.name, len(uploaded_file.getvalue()))
+    previous_signature = st.session_state.get("last_upload_signature")
+
+    if upload_signature != previous_signature:
+        # Ini benar-benar unggahan baru pada sesi ini
+        is_replacement = cached_meta is not None
+        save_uploaded_file_to_cache(uploaded_file)
+        if is_replacement:
+            # Ganti file = riwayat pengecekan lama ikut hilang
+            save_checked_log({})
+            st.session_state["show_replaced_notice"] = True
+        st.session_state["last_upload_signature"] = upload_signature
+        cached_meta = load_upload_cache_meta()
+elif cached_meta is not None:
+    # Tidak ada unggahan baru pada sesi ini -> muat file yang tersimpan sebelumnya
+    cached_file = load_cached_uploaded_file()
+    if cached_file is not None:
+        uploaded_file = cached_file
+        loaded_from_cache = True
+        st.session_state.setdefault(
+            "last_upload_signature", (cached_meta["filename"], None)
+        )
+
+with st.sidebar:
+    if cached_meta is not None:
+        uploaded_at = datetime.fromisoformat(cached_meta["uploaded_at"])
+        st.caption(
+            f"📁 File tersimpan: **{cached_meta['filename']}**\n\n"
+            f"Diunggah: {format_indonesian_date(uploaded_at.date())}"
+        )
+        if st.button("🗑️ Hapus Riwayat File Tersimpan", use_container_width=True):
+            clear_upload_history()
+            st.session_state.pop("last_upload_signature", None)
+            st.rerun()
+
+if st.session_state.pop("show_replaced_notice", False):
+    st.info(
+        "File sebelumnya telah digantikan dengan file baru. "
+        "Riwayat pengecekan lama otomatis direset."
+    )
+
 if uploaded_file is None:
     show_empty_state()
     st.stop()
+
+if loaded_from_cache:
+    st.caption("ℹ️ Data dimuat otomatis dari file yang tersimpan sebelumnya di dashboard.")
 
 sheets, load_error = load_workbook(uploaded_file)
 if load_error:
@@ -597,15 +824,39 @@ else:
 tab_data, tab_summary = st.tabs(["Data hasil filter", "Ringkasan kolom"])
 
 with tab_data:
-    st.dataframe(
-        display_dataframe,
-        use_container_width=True,
-        hide_index=True,
-        height=520,
-    )
+    if display_dataframe.empty:
+        st.dataframe(display_dataframe, use_container_width=True, hide_index=True, height=200)
+    else:
+        st.caption(
+            "✅ Centang kolom **Cek** pada baris yang sudah Anda verifikasi. "
+            "Tanggal pengecekan akan otomatis tercatat dan tersimpan."
+        )
+        checkable_table = build_checkable_table(display_dataframe, customer_mode)
+        non_editable_columns = [
+            column for column in checkable_table.columns if column != "Cek"
+        ]
+        edited_table = st.data_editor(
+            checkable_table,
+            use_container_width=True,
+            hide_index=True,
+            height=520,
+            key="data_editor_checked",
+            column_config={
+                "Cek": st.column_config.CheckboxColumn(
+                    "Cek", help="Tandai baris ini sebagai sudah dicek/diverifikasi."
+                ),
+                "Status Pengecekan": st.column_config.TextColumn(
+                    "Status Pengecekan", disabled=True
+                ),
+            },
+            disabled=non_editable_columns,
+        )
 
-    # Menampilkan Tombol Print Cetak Hasil Filter
-    render_print_button()
+        if sync_checked_log_from_editor(edited_table):
+            st.rerun()
+
+    # Menampilkan Tombol Print Cetak yang Terhubung Langsung ke Excel Terfilter
+    render_print_button(display_dataframe)
 
     col_csv, col_excel = st.columns(2)
     with col_csv:
